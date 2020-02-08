@@ -2,6 +2,11 @@
 
 ## v1.0.18 (TBA)
 
+### Enhancements
+
+* [`Pow.Plug.Session`] Now sets a global lock when renewing the session
+* [`PowPersistentSession.Plug.Cookie`] Now sets a global lock when authenticating the user
+
 ### Bug fixes
 
 * [`Pow.Phoenix.Routes`] Fixed bug where callback route methods is not using the overridden method
