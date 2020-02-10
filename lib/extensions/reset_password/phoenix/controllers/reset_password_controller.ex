@@ -82,7 +82,7 @@ defmodule PowResetPassword.Phoenix.ResetPasswordController do
   end
 
   defp load_user_from_reset_token(%{params: %{"id" => token}} = conn, _opts) do
-    case Plug.user_from_token(conn, token) do
+    case Plug.verify_token_fetch_user(conn, token) do
       nil ->
         conn
         |> put_flash(:error, extension_messages(conn).invalid_token(conn))

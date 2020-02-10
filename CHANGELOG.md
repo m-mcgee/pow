@@ -1,5 +1,31 @@
 # Changelog
 
+## v1.0.18 (TBA)
+
+### Enhancements
+
+* [`PowEmailConfirmation.Plug`] Added `PowEmailConfirmation.Plug.sign_confirmation_token/2` to sign the `email_confirmation_token` to prevent timing attacks
+* [`PowEmailConfirmation.Plug`] Added `PowEmailConfirmation.Plug.verify_token_confirm_email/2` to verify the signed `email_confirmation_token` to prevent timing attacks
+* [`PowInvitation.Plug`] Added `PowInvitation.Plug.sign_invitation_token/2` to sign the `invitation_token`
+* [`PowInvitation.Plug`] Added `PowInvitation.Plug.verify_token_fetch_invited_user/2` to verify the signed `invitation_token` to prevent timing attacks
+* [`PowResetPassword.Plug`] Changed `PowResetPassword.Plug.create_reset_token/2` to sign the `:token`
+* [`PowResetPassword.Plug`] Added `PowResetPassword.Plug.verify_token_fetch_user/2` to verify the signed token to prevent timing attacks
+* [`PowResetPassword.Plug`] Changed `PowResetPassword.Plug.update_user_password/2` so it decodes the signed token
+* [`PowPersistentSession.Plug.Cookie`] Now uses signed tokens to prevent timing attacks
+* [`Pow.Plug.Session`] Now uses signed session ID's to prevent timing attacks
+* [`Pow.Plug`] Added `Pow.Plug.sign_token/2` to sign tokens
+* [`Pow.Plug`] Added `Pow.Plug.verify_token/2` to decode and verify signed tokens
+
+### Deprecations
+
+* [`PowEmailConfirmation.Plug`] `PowEmailConfirmation.Plug.confirm_email/2` has deprecated in favor of `PowEmailConfirmation.Plug.verify_token_confirm_email/2`
+* [`PowInvitation.Plug`] `PowInvitation.Plug.invited_user_from_token/2` has deprecated in favor of `PowInvitation.Plug.verify_token_fetch_invited_user/2`
+* [`PowResetPassword.Plug`] `PowResetPassword.Plug.user_from_token/2` has deprecated in favor of `PowResetPassword.Plug.verify_token_fetch_user/2`
+
+### Documentation
+
+* Updated the [API guide](guides/api.md) with signed tokens
+
 ## v1.0.17 (2020-02-04)
 
 ### Enhancements

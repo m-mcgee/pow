@@ -14,6 +14,9 @@ defmodule Pow.Plug.Session do
   assigned private `:pow_session_metadata` key in the conn. The value has to be
   a keyword list.
 
+  The session id used in the client is signed using `Pow.Plug.sign_token/3` to
+  prevent timing attacks.
+
   ## Example
 
       @pow_config [
@@ -121,6 +124,8 @@ defmodule Pow.Plug.Session do
   The metadata of the session will be assigned as a private
   `:pow_session_metadata` key in the conn so it may be used in `create/3`.
 
+  The session id will be decoded and verified with `Pow.Plug.verify_token/3`.
+
   See `do_fetch/2` for more.
   """
   @impl true
@@ -135,9 +140,53 @@ defmodule Pow.Plug.Session do
   defp fetch(conn, session_id, config) do
     {store, store_config} = store(config)
 
-    {session_id, store.get(store_config, session_id)}
+    store.get(store_config, session_id)
     |> convert_old_session_value()
     |> handle_fetched_session_value(conn, config)
+  end
+
+  # TODO: Remove by 1.1.0
+  defp convert_old_session_value({user, timestamp}) when is_number(timestamp), do: {user, inserted_at: timestamp}
+  defp convert_old_session_value(any), do: any
+
+  defp handle_fetched_session_value(:not_found, conn, _config), do: {conn, nil}
+  defp handle_fetched_session_value({user, metadata}, conn, config) when is_list(metadata) do
+    conn
+    |> Conn.put_private(:pow_session_metadata, metadata)
+    |> renew_stale_session(user, metadata, config)
+  end
+
+  defp renew_stale_session(conn, user, metadata, config) do
+    metadata
+    |> Keyword.get(:inserted_at)
+    |> session_stale?(config)
+    |> case do
+      true  -> create(conn, user, config)
+      false -> {conn, user}
+    end
+  end
+
+  defp session_stale?(inserted_at, config) do
+    ttl = Config.get(config, :session_ttl_renewal, @session_ttl_renewal)
+    session_stale?(inserted_at, config, ttl)
+  end
+  defp session_stale?(_inserted_at, _config, nil), do: false
+  defp session_stale?(inserted_at, _config, ttl) do
+    inserted_at + ttl < timestamp()
+  end
+
+  defp gen_session_id(config) do
+    uuid = UUID.generate()
+
+    Plug.prepend_with_namespace(config, uuid)
+  end
+
+  defp session_key(config) do
+    Config.get(config, :session_key, default_session_key(config))
+  end
+
+  defp default_session_key(config) do
+    Plug.prepend_with_namespace(config, @session_key)
   end
 
   @doc """
@@ -155,6 +204,8 @@ defmodule Pow.Plug.Session do
   be passed on as the metadata for the session. However the `:inserted_at` value
   will always be overridden. If no `:fingerprint` exists in the metadata a
   random UUID value will be generated as its value.
+
+  The session id will be signed for client use with `Pow.Plug.sign_token/3`.
 
   See `do_create/3` for more.
   """
@@ -183,6 +234,8 @@ defmodule Pow.Plug.Session do
   end
 
   defp gen_fingerprint(), do: UUID.generate()
+
+  defp timestamp, do: :os.system_time(:millisecond)
 
   defp before_send_create(conn, value, config) do
     {store, store_config} = store(config)
@@ -223,63 +276,25 @@ defmodule Pow.Plug.Session do
     end)
   end
 
-  # TODO: Remove by 1.1.0
-  defp convert_old_session_value({session_id, {user, timestamp}}) when is_number(timestamp), do: {session_id, {user, inserted_at: timestamp}}
-  defp convert_old_session_value(any), do: any
+  defp client_store_fetch(conn, config) do
+    conn = Conn.fetch_session(conn)
 
-  defp handle_fetched_session_value({_session_id, :not_found}, conn, _config), do: {conn, nil}
-  defp handle_fetched_session_value({_session_id, {user, metadata}}, conn, config) when is_list(metadata) do
-    conn
-    |> Conn.put_private(:pow_session_metadata, metadata)
-    |> renew_stale_session(user, metadata, config)
-  end
-
-  defp renew_stale_session(conn, user, metadata, config) do
-    metadata
-    |> Keyword.get(:inserted_at)
-    |> session_stale?(config)
-    |> case do
-      true  -> create(conn, user, config)
-      false -> {conn, user}
+    with session_id when is_binary(session_id) <- Conn.get_session(conn, session_key(config)),
+         {:ok, session_id}                     <- Plug.verify_token(conn, signing_salt(), session_id) do
+      {session_id, conn}
+    else
+      _any -> {nil, conn}
     end
   end
 
-  defp session_stale?(inserted_at, config) do
-    ttl = Config.get(config, :session_ttl_renewal, @session_ttl_renewal)
-    session_stale?(inserted_at, config, ttl)
-  end
-  defp session_stale?(_inserted_at, _config, nil), do: false
-  defp session_stale?(inserted_at, _config, ttl) do
-    inserted_at + ttl < timestamp()
-  end
-
-  defp gen_session_id(config) do
-    uuid = UUID.generate()
-
-    Plug.prepend_with_namespace(config, uuid)
-  end
-
-  defp session_key(config) do
-    Config.get(config, :session_key, default_session_key(config))
-  end
-
-  defp default_session_key(config) do
-    Plug.prepend_with_namespace(config, @session_key)
-  end
-
-  defp timestamp, do: :os.system_time(:millisecond)
-
-  defp client_store_fetch(conn, config) do
-    conn       = Conn.fetch_session(conn)
-    session_id = Conn.get_session(conn, session_key(config))
-
-    {session_id, conn}
-  end
+  defp signing_salt(), do: Atom.to_string(__MODULE__)
 
   defp client_store_put(conn, session_id, config) do
+    signed_session_id = Plug.sign_token(conn, signing_salt(), session_id, config)
+
     conn
     |> Conn.fetch_session()
-    |> Conn.put_session(session_key(config), session_id)
+    |> Conn.put_session(session_key(config), signed_session_id)
     |> Conn.configure_session(renew: true)
   end
 

@@ -36,8 +36,9 @@ defmodule PowResetPassword.Plug do
   Finds a user for the provided params, creates a token, and stores the user
   for the token.
 
-  To prevent timing attacks, `Pow.UUID.generate/0` is called whether the user
-  exists or not.
+  The returned `:token` is signed for public consumption. Additionally
+  `Pow.UUID.generate/0` is called whether the user exists or not to prevent
+  timing attacks.
 
   `:reset_password_token_store` can be passed in the config for the conn. This
   value defaults to
@@ -62,17 +63,44 @@ defmodule PowResetPassword.Plug do
 
         store.put(store_config, token, user)
 
-        {:ok, %{token: token, user: user}, conn}
+        signed = Plug.sign_token(conn, signing_salt(), token, config)
+
+        {:ok, %{token: signed, user: user}, conn}
     end
   end
 
+  defp signing_salt(), do: Atom.to_string(__MODULE__)
+
   @doc """
-  Fetches user from the store by the provided token.
+  Verifies the signed token and fetches invited user from store.
 
   See `create_reset_token/2` for more on `:reset_password_token_store` config
   option.
   """
-  @spec user_from_token(Conn.t(), binary()) :: map() | nil
+  @spec verify_token_fetch_user(Conn.t(), binary()) :: map() | nil
+  def verify_token_fetch_user(conn, signed_token) do
+    config = Plug.fetch_config(conn)
+
+    case Plug.verify_token(conn, signing_salt(), signed_token, config) do
+      :error       -> nil
+      {:ok, token} -> fetch_user_from_token(token, config)
+    end
+  end
+
+  defp fetch_user_from_token(token, config) do
+    {store, store_config} = store(config)
+
+    store_config
+    |> store.get(token)
+    |> case do
+      :not_found -> nil
+      user       -> user
+    end
+  end
+
+  # TODO: Remove by 1.1.0
+  @doc false
+  @deprecated "Use `verify_token_fetch_user/2` instead"
   def user_from_token(conn, token) do
     {store, store_config} =
       conn
@@ -105,7 +133,10 @@ defmodule PowResetPassword.Plug do
   end
 
   defp maybe_expire_token({:ok, user}, conn, token, config) do
-    expire_token(token, config)
+    case Plug.verify_token(conn, signing_salt(), token, config) do
+      :error       -> :ok
+      {:ok, token} -> expire_token(token, config)
+    end
 
     {:ok, user, conn}
   end

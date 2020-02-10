@@ -2,7 +2,9 @@ defmodule PowEmailConfirmation.Phoenix.ControllerCallbacksTest do
   use PowEmailConfirmation.TestWeb.Phoenix.ConnCase
 
   alias Plug.Conn
-  alias Pow.{Ecto.Schema.Password, Plug}
+  alias PowEmailConfirmation.Plug
+  alias Pow.Ecto.Schema.Password
+  alias Pow.Plug, as: PowPlug
   alias PowEmailConfirmation.Test.Users.User
 
   @password "secret1234"
@@ -16,12 +18,12 @@ defmodule PowEmailConfirmation.Phoenix.ControllerCallbacksTest do
       assert get_flash(conn, :error) == "You'll need to confirm your e-mail before you can sign in. An e-mail confirmation link has been sent to you."
       assert redirected_to(conn) == "/after_signed_in"
 
-      refute Plug.current_user(conn)
+      refute PowPlug.current_user(conn)
 
       assert_received {:mail_mock, mail}
       assert token = mail.user.email_confirmation_token
       refute mail.user.email_confirmed_at
-      assert mail.html =~ "<a href=\"http://localhost/confirm-email/#{token}\">"
+      assert mail.html =~ "<a href=\"http://localhost/confirm-email/#{sign_token(conn, token)}\">"
       assert mail.user.email == "test@example.com"
     end
 
@@ -35,7 +37,7 @@ defmodule PowEmailConfirmation.Phoenix.ControllerCallbacksTest do
     test "when current email confirmed and has unconfirmed changed email", %{conn: conn} do
       conn = post conn, Routes.pow_session_path(conn, :create, %{"user" => Map.put(@valid_params, "email", "with-unconfirmed-changed-email@example.com")})
 
-      assert %{id: 1} = Plug.current_user(conn)
+      assert %{id: 1} = PowPlug.current_user(conn)
 
       refute_received {:mail_mock, _mail}
     end
@@ -52,12 +54,12 @@ defmodule PowEmailConfirmation.Phoenix.ControllerCallbacksTest do
       assert get_flash(conn, :error) == "You'll need to confirm your e-mail before you can sign in. An e-mail confirmation link has been sent to you."
       assert redirected_to(conn) == "/after_registration"
 
-      refute Plug.current_user(conn)
+      refute PowPlug.current_user(conn)
 
       assert_received {:mail_mock, mail}
       assert token = mail.user.email_confirmation_token
       refute mail.user.email_confirmed_at
-      assert mail.html =~ "<a href=\"http://localhost/confirm-email/#{token}\">"
+      assert mail.html =~ "<a href=\"http://localhost/confirm-email/#{sign_token(conn, token)}\">"
       assert mail.user.email == "test@example.com"
     end
 
@@ -75,7 +77,7 @@ defmodule PowEmailConfirmation.Phoenix.ControllerCallbacksTest do
       assert get_flash(conn, :error) == "You'll need to confirm your e-mail before you can sign in. An e-mail confirmation link has been sent to you."
       assert redirected_to(conn) == "/after_registration"
 
-      refute Plug.current_user(conn)
+      refute PowPlug.current_user(conn)
 
       refute_received {:mail_mock, _mail}
     end
@@ -99,14 +101,14 @@ defmodule PowEmailConfirmation.Phoenix.ControllerCallbacksTest do
 
     setup %{conn: conn} do
       user = Ecto.put_meta(@user, state: :loaded)
-      conn = Plug.assign_current_user(conn, user, [])
+      conn = PowPlug.assign_current_user(conn, user, [])
 
       {:ok, conn: conn}
     end
 
     test "when email changes", %{conn: conn} do
       conn = put conn, Routes.pow_registration_path(conn, :update, %{"user" => @change_email_params})
-      assert %{id: 1, email: "test@example.com", email_confirmation_token: new_token} = Plug.current_user(conn)
+      assert %{id: 1, email: "test@example.com", email_confirmation_token: new_token} = PowPlug.current_user(conn)
 
       assert get_flash(conn, :error) == "You'll need to confirm the e-mail before it's updated. An e-mail confirmation link has been sent to you."
       assert get_flash(conn, :info) == "Your account has been updated."
@@ -114,8 +116,8 @@ defmodule PowEmailConfirmation.Phoenix.ControllerCallbacksTest do
 
       assert_received {:mail_mock, mail}
       assert mail.subject == "Confirm your email address"
-      assert mail.text =~ "\nhttp://localhost/confirm-email/#{new_token}\n"
-      assert mail.html =~ "<a href=\"http://localhost/confirm-email/#{new_token}\">"
+      assert mail.text =~ "\nhttp://localhost/confirm-email/#{sign_token(conn, new_token)}\n"
+      assert mail.html =~ "<a href=\"http://localhost/confirm-email/#{sign_token(conn, new_token)}\">"
       assert mail.user.email == "new@example.com"
     end
 
@@ -123,7 +125,7 @@ defmodule PowEmailConfirmation.Phoenix.ControllerCallbacksTest do
       conn = put conn, Routes.pow_registration_path(conn, :update, %{"user" => @params})
 
       assert get_flash(conn, :info) == "Your account has been updated."
-      assert %{id: 1, unconfirmed_email: nil, email_confirmation_token: nil} = Plug.current_user(conn)
+      assert %{id: 1, unconfirmed_email: nil, email_confirmation_token: nil} = PowPlug.current_user(conn)
 
       refute_received {:mail_mock, _mail}
     end
@@ -131,29 +133,40 @@ defmodule PowEmailConfirmation.Phoenix.ControllerCallbacksTest do
 
   alias PowEmailConfirmation.PowInvitation.TestWeb.Phoenix.Endpoint, as: PowInvitationEndpoint
   alias PowEmailConfirmation.PowInvitation.TestWeb.Phoenix.Router.Helpers, as: PowInvitationRoutes
+  alias PowInvitation.Plug, as: PowInvitationPlug
 
   describe "PowInvitation.Phoenix.InvitationController.update/2" do
     @token               "token"
     @params              %{"email" => "test@example.com", "password" => @password, "password_confirmation" => @password}
     @change_email_params %{"email" => "new@example.com", "password" => @password, "password_confirmation" => @password}
+    @secret_key_base     String.duplicate("abcdefghijklmnopqrstuvxyz0123456789", 2)
 
-    test "when email changes", %{conn: conn} do
-      conn = Phoenix.ConnTest.dispatch(conn, PowInvitationEndpoint, :put, PowInvitationRoutes.pow_invitation_invitation_path(conn, :update, @token, %{"user" => @change_email_params}))
+    setup %{conn: conn} do
+      conn  = %{conn | secret_key_base: @secret_key_base, private: %{pow_config: []}}
+      token = PowInvitationPlug.sign_invitation_token(conn, %{invitation_token: @token})
+
+      {:ok, token: token}
+    end
+
+    test "when email changes", %{conn: conn, token: token} do
+      conn  = Phoenix.ConnTest.dispatch(conn, PowInvitationEndpoint, :put, PowInvitationRoutes.pow_invitation_invitation_path(conn, :update, token, %{"user" => @change_email_params}))
 
       assert get_flash(conn, :error) == "You'll need to confirm the e-mail before it's updated. An e-mail confirmation link has been sent to you."
-      assert %{id: 1, email_confirmation_token: new_token} = Plug.current_user(conn)
+      assert %{id: 1, email_confirmation_token: new_token} = PowPlug.current_user(conn)
       refute is_nil(new_token)
 
       assert_received {:mail_mock, _mail}
     end
 
-    test "when email hasn't changed", %{conn: conn} do
-      conn = Phoenix.ConnTest.dispatch(conn, PowInvitationEndpoint, :put, PowInvitationRoutes.pow_invitation_invitation_path(conn, :update, @token, %{"user" => @params}))
+    test "when email hasn't changed", %{conn: conn, token: token} do
+      conn  = Phoenix.ConnTest.dispatch(conn, PowInvitationEndpoint, :put, PowInvitationRoutes.pow_invitation_invitation_path(conn, :update, token, %{"user" => @params}))
 
       refute get_flash(conn, :error)
-      assert %{id: 1, email_confirmation_token: nil} = Plug.current_user(conn)
+      assert %{id: 1, email_confirmation_token: nil} = PowPlug.current_user(conn)
 
       refute_received {:mail_mock, _mail}
     end
   end
+
+  defp sign_token(conn, token), do: Plug.sign_confirmation_token(conn, %{email_confirmation_token: token})
 end

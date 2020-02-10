@@ -24,6 +24,11 @@ Some of the below is based on [OWASP](https://www.owasp.org/) or [NIST SP800-63b
 
 * If a user couldn't be found or the `:password_hash` is `nil` a blank password is used
 * A UUID is always generated during reset password flow
+* Session ID is signed and verified in `Pow.Plug.Session`
+* Persistent session token is signed and verified in `PowPersistentSession.Plug.Cookie`
+* Reset password token is signed and verified in `PowResetPassword.Plug`
+* E-mail confirmation token is signed and verified in `PowEmailConfirmation.Plug`
+* Invitation token is signed and verified in `PowInvitation.Plug`
 
 ## User enumeration attacks
 

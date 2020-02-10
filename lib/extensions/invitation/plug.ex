@@ -62,9 +62,35 @@ defmodule PowInvitation.Plug do
   defp invited_user(conn), do: conn.assigns[:invited_user]
 
   @doc """
-  Fetches invited user by the invitation token.
+  Signs the invitation token for public consumption.
+
+  This is used to prevent timing attacks.
   """
-  @spec invited_user_from_token(Conn.t(), binary()) :: map() | nil
+  @spec sign_invitation_token(Conn.t(), binary()) :: {:ok, map(), Conn.t()} | {:error, map(), Conn.t()}
+  def sign_invitation_token(conn, %{invitation_token: token}),
+    do: Plug.sign_token(conn, signing_salt(), token)
+
+  defp signing_salt(), do: Atom.to_string(__MODULE__)
+
+  @doc """
+  Verifies the token and fetches invited user by the invitation token.
+
+  The token should have been signed with `sign_invitation_token/2`. This is
+  done to prevent timing attacks.
+  """
+  @spec verify_token_fetch_invited_user(Conn.t(), binary()) :: {:ok, map(), Conn.t()} | {:error, map(), Conn.t()}
+  def verify_token_fetch_invited_user(conn, signed_token) do
+    config = Plug.fetch_config(conn)
+
+    case Plug.verify_token(conn, signing_salt(), signed_token, config) do
+      :error       -> nil
+      {:ok, token} -> InvitationContext.get_by_invitation_token(token, config)
+    end
+  end
+
+  # TODO: Remove by 1.1.0
+  @doc false
+  @deprecated "Use `verify_token_fetch_invited_user/2` instead"
   def invited_user_from_token(conn, token) do
     config = Plug.fetch_config(conn)
 
